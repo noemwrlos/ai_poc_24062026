@@ -1,0 +1,14 @@
+services:
+  app:
+    container_name: ai_service
+    network_mode: host
+    build: .
+    environment:
+      - PYTHONPATH=/akmf
+    env_file:
+      - .env
+    command: bash -c "granian --interface asgi --port 8080 app.main:app --reload"
+    volumes:
+      - ./app:/akmf/app
+    ports:
+      - "8080:8080"

@@ -1,0 +1,71 @@
+[project]
+name = "ai-service-backbone"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi==0.139.2",
+    "pydantic[email]==2.13.4",
+    "pydantic-settings==2.14.2",
+    "uvicorn[standard]==0.51.0",
+    "httpx==0.28.1",
+    "httptools==0.8.0",
+    "rich==15.0.0",
+    "granian==2.7.9",
+    "websockets>=16.1.1",
+    "attrs>=26.1.0",
+    "orjson>=3.11.9",
+]
+[dependency-groups]
+dev = [
+    "ruff==0.15.22",
+]
+
+test = [
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "inline-snapshot==0.35.2",
+    "dirty-equals==0.11",
+    "polyfactory==3.3.0",
+]
+
+
+[tool.ruff]
+target-version = "py314"
+
+[tool.ruff.lint]
+select = [
+    "E", # pycodestyle errors
+    "W", # pycodestyle warnings
+    "F", # pyflakes
+    "I", # isort
+    "B", # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+    "ARG001", # unused arguments in functions
+]
+ignore = [
+    "E501", # line too long, handled by black
+    "B008", # do not perform function calls in argument defaults
+    "W191", # indentation contains tabs
+    "B904", # Allow raising exceptions without from e, for HTTPException
+]
+
+[tool.inline-snapshot]
+hash-length = 15
+default-flags = ["report"]
+default-flags-tui = ["create", "review"]
+show-updates = false
+format-command = "ruff format --stdin-filename {filename}"
+
+[tool.inline-snapshot.shortcuts]
+review = ["review"]
+fix = ["create", "fix"]
+
+[tool.pyrefly]
+project-excludes = [
+    "**/venv*",
+    "**/.venv*",
+]
+preset = "legacy"

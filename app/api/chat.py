@@ -1,8 +1,10 @@
 """Websocket endpoint implementing the chat flow."""
 
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi.templating import Jinja2Templates
 from pydantic import TypeAdapter, ValidationError
 
 from app.schemas.chat import (
@@ -24,7 +26,17 @@ from app.services.chat_session import ChatSession, ChatSessionManager
 
 router = APIRouter()
 
+TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
 _client_event_adapter: TypeAdapter[Any] = TypeAdapter(ClientEvent)
+
+
+def _websocket_url_for_request(request: Request) -> str:
+    """Build the websocket URL that matches the current HTTP request."""
+    ws_scheme = "wss" if request.url.scheme == "https" else "ws"
+    ws_path = request.url_for("chat_websocket").path
+    return f"{ws_scheme}://{request.url.netloc}{ws_path}"
 
 
 async def _handle_start(
@@ -65,6 +77,16 @@ async def _handle_history_request(websocket: WebSocket, session: ChatSession) ->
     )
 
 
+@router.get("/", include_in_schema=False)
+async def chat_page(request: Request) -> Any:
+    """Serve the web chat client."""
+    return templates.TemplateResponse(
+        request,
+        "chat.html",
+        {"ws_url": _websocket_url_for_request(request)},
+    )
+
+
 @router.websocket("/ws")
 async def chat_websocket(websocket: WebSocket) -> None:
     """Websocket chat endpoint. See module docstring for the event flow."""
@@ -99,7 +121,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         break
             except Exception as exc:  # noqa: BLE001
                 await websocket.send_json(
-                    ChatError(message=f"Failed to process event: {exc}").model_dump(mode="json")
+                    ChatError(message=f"Failed to process event: {exc}").model_dump(
+                        mode="json"
+                    )
                 )
     except WebSocketDisconnect:
         # await logger.ainfo("Chat websocket disconnected", session_id=str(session.id))

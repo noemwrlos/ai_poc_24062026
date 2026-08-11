@@ -125,9 +125,15 @@ docker compose up --remove-orphans
 
 Once the API is running, use the interactive WebSocket client to chat with the service.
 
-### Start the chat client
+### Web chat client
 
-[](#start-the-chat-client)
+[](#web-chat-client)
+
+Open `http://localhost:8080/v1/chat` in a browser for a simple chat UI built with FastAPI, Jinja2, Bootstrap 5, and Alpine.js. It uses the same `/v1/chat/ws` WebSocket endpoint as the text client and supports light/dark mode.
+
+### Text chat client
+
+[](#text-chat-client)
 
 ```bash
 python scripts/chit_chat_with_llm.py

@@ -1,5 +1,7 @@
 """Websocket endpoint implementing the chat flow."""
 
+import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,61 @@ def _websocket_url_for_request(request: Request) -> str:
     return f"{ws_scheme}://{request.url.netloc}{ws_path}"
 
 
+async def _batched_chunks(
+    source: AsyncIterator[str],
+    max_interval: float = 0.05,
+    max_chars: int = 128,
+) -> AsyncIterator[str]:
+    """Buffer small streamed chunks and flush them in fewer frames.
+
+    Tiny model tokens arrive very quickly; sending each one as a separate
+    WebSocket message and re-rendering the UI per token is expensive. This
+    generator batches them by time (``max_interval``) or by accumulated size
+    (``max_chars``), whichever comes first, while still preserving the same
+    wire format (each yielded item is sent as one ``assistant_chunk``).
+    """
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    async def pump() -> None:
+        async for chunk in source:
+            await queue.put(chunk)
+        await queue.put(None)
+
+    pump_task = asyncio.create_task(pump())
+    buffer: list[str] = []
+    buffered_chars = 0
+
+    try:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(queue.get(), timeout=max_interval)
+            except TimeoutError:
+                if buffer:
+                    yield "".join(buffer)
+                    buffer.clear()
+                    buffered_chars = 0
+                continue
+
+            if chunk is None:
+                if buffer:
+                    yield "".join(buffer)
+                break
+
+            buffer.append(chunk)
+            buffered_chars += len(chunk)
+
+            if buffered_chars >= max_chars:
+                yield "".join(buffer)
+                buffer.clear()
+                buffered_chars = 0
+    finally:
+        pump_task.cancel()
+        try:
+            await pump_task
+        except asyncio.CancelledError:
+            pass
+
+
 async def _handle_start(
     websocket: WebSocket, session: ChatSession, event: StartConversation
 ) -> None:
@@ -57,7 +114,7 @@ async def _handle_user_message(
 
     chunks: list[str] = []
     index = 0
-    async for chunk in agent.stream_reply(session.history()):
+    async for chunk in _batched_chunks(agent.stream_reply(session.history())):
         chunks.append(chunk)
         await websocket.send_json(
             AssistantChunk(index=index, content=chunk).model_dump(mode="json")

@@ -117,6 +117,7 @@
       line-height: 1.5;
       word-wrap: break-word;
       box-shadow: var(--shadow);
+      white-space: pre-wrap;
     }
 
     .message-user {
@@ -331,7 +332,7 @@
           </div>
         </template>
 
-        <template x-for="(msg, index) in messages" :key="index">
+        <template x-for="msg in messages" :key="msg.id">
           <div class="message" :class="'message-' + msg.role">
             <div class="message-avatar">
               <i class="bi" :class="msg.role === 'user' ? 'bi-person' : msg.role === 'system' ? 'bi-gear' : 'bi-robot'"></i>
@@ -343,7 +344,17 @@
           </div>
         </template>
 
-        <template x-if="isTyping">
+        <template x-if="streamingContent !== ''">
+          <div class="message message-assistant">
+            <div class="message-avatar"><i class="bi bi-robot"></i></div>
+            <div>
+              <div class="message-content" x-text="streamingContent"></div>
+              <div class="message-meta">Assistant</div>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="(isTyping || streamFlushPending) && streamingContent === ''">
           <div class="message message-assistant">
             <div class="message-avatar"><i class="bi bi-robot"></i></div>
             <div class="message-content" style="min-width: 60px;">
@@ -393,12 +404,17 @@
         input: '',
         pendingMessage: '',
         isTyping: false,
+        streamingContent: '',
+        streamBuffer: [],
+        streamFlushPending: false,
         systemPrompt: 'You are a helpful assistant.',
         darkMode: false,
         sidebarOpen: false,
         reconnectAttempts: 0,
         maxReconnectAttempts: 5,
         wsUrl: {{ ws_url | tojson }},
+        scrollThrottle: null,
+        messageId: 0,
 
         get statusClass() {
           if (this.connecting) return 'status-connecting';
@@ -448,6 +464,9 @@
             this.ws = null;
             this.conversationStarted = false;
             this.isTyping = false;
+            this.streamingContent = '';
+            this.streamBuffer = [];
+            this.streamFlushPending = false;
             this.maybeReconnect();
           };
 
@@ -478,14 +497,16 @@
               break;
             case 'assistant_chunk':
               this.isTyping = false;
-              this.appendChunk(event.content);
+              this.bufferChunk(event.content);
               break;
             case 'assistant_message':
               this.isTyping = false;
+              this.flushStreamBuffer();
               this.finalizeAssistantMessage(event.message.content);
               break;
             case 'history':
-              this.messages = event.messages || [];
+              this.streamingContent = '';
+              this.messages = (event.messages || []).map((m) => ({ id: ++this.messageId, ...m }));
               this.scrollToBottom();
               break;
             case 'error':
@@ -503,6 +524,9 @@
 
         startConversation() {
           this.messages = [];
+          this.streamingContent = '';
+          this.streamBuffer = [];
+          this.streamFlushPending = false;
           this.send({ type: 'start', system_prompt: this.systemPrompt.trim() || null });
         },
 
@@ -512,7 +536,7 @@
 
           this.input = '';
           this.resetTextarea();
-          this.messages.push({ role: 'user', content });
+          this.messages.push({ id: ++this.messageId, role: 'user', content });
           this.scrollToBottom();
 
           if (!this.conversationStarted) {
@@ -525,23 +549,28 @@
           this.send({ type: 'user_message', content });
         },
 
-        appendChunk(chunk) {
-          const last = this.messages[this.messages.length - 1];
-          if (last && last.role === 'assistant') {
-            last.content += chunk;
-          } else {
-            this.messages.push({ role: 'assistant', content: chunk });
+        bufferChunk(chunk) {
+          this.streamBuffer.push(chunk);
+          if (!this.streamFlushPending) {
+            this.streamFlushPending = true;
+            requestAnimationFrame(() => this.flushStreamBuffer());
           }
-          this.scrollToBottom();
+        },
+
+        flushStreamBuffer() {
+          if (this.streamBuffer.length === 0) {
+            this.streamFlushPending = false;
+            return;
+          }
+          this.streamingContent += this.streamBuffer.join('');
+          this.streamBuffer = [];
+          this.streamFlushPending = false;
+          this.throttledScrollToBottom();
         },
 
         finalizeAssistantMessage(content) {
-          const last = this.messages[this.messages.length - 1];
-          if (last && last.role === 'assistant') {
-            last.content = content;
-          } else {
-            this.messages.push({ role: 'assistant', content });
-          }
+          this.streamingContent = '';
+          this.messages.push({ id: ++this.messageId, role: 'assistant', content });
           this.scrollToBottom();
         },
 
@@ -553,7 +582,7 @@
         },
 
         showError(message) {
-          this.messages.push({ role: 'system', content: 'Error: ' + message });
+          this.messages.push({ id: ++this.messageId, role: 'system', content: 'Error: ' + message });
           this.scrollToBottom();
         },
 
@@ -565,11 +594,27 @@
             .replace(/\n/g, '<br>');
         },
 
+        isNearBottom() {
+          const area = this.$refs.messagesArea;
+          if (!area) return true;
+          return area.scrollHeight - area.scrollTop - area.clientHeight < 100;
+        },
+
         scrollToBottom() {
           this.$nextTick(() => {
             const area = this.$refs.messagesArea;
             if (area) area.scrollTop = area.scrollHeight;
           });
+        },
+
+        throttledScrollToBottom() {
+          if (this.scrollThrottle) return;
+          this.scrollThrottle = setTimeout(() => {
+            this.scrollThrottle = null;
+            if (this.isNearBottom()) {
+              this.scrollToBottom();
+            }
+          }, 50);
         },
 
         autoResize(event) {

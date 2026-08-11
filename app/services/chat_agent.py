@@ -26,6 +26,10 @@ class ChatAgent(Protocol):
         """
         ...  # pragma: no cover - protocol stub, never called directly
 
+    async def list_models(self) -> list[str]:
+        """Return model IDs available from the backend, if any."""
+        ...  # pragma: no cover - protocol stub, never called directly
+
     async def aclose(self) -> None:
         """Release any held resources (connections, clients, ...)."""
 
@@ -58,6 +62,9 @@ class LocalEchoAgent:
         for word in reply.split(" "):
             await asyncio.sleep(self.stream_delay_seconds + random.uniform(0, 0.01))
             yield word + " "
+
+    async def list_models(self) -> list[str]:
+        return ["local-echo-stub"]
 
     async def aclose(self) -> None:
         return None
@@ -109,9 +116,15 @@ def _create_httpx_client(instance: OllamaChatAgent) -> httpx.AsyncClient:
         instance: The OllamaChatAgent instance being initialized.
 
     Returns:
-        An initialized httpx.AsyncClient configured with base_url and timeout.
+        An initialized httpx.AsyncClient configured with base_url, timeout and
+        an optional Authorization header.
     """
-    return httpx.AsyncClient(base_url=instance.base_url, timeout=instance.timeout)
+    headers: dict[str, str] = {}
+    if instance.api_key:
+        headers["Authorization"] = f"Bearer {instance.api_key}"
+    return httpx.AsyncClient(
+        base_url=instance.base_url, timeout=instance.timeout, headers=headers
+    )
 
 
 @attrs.define(slots=True, eq=False, hash=False)
@@ -139,6 +152,13 @@ class OllamaChatAgent:
         metadata={
             "description": "OpenAI-compatible API endpoint base URL",
             "example": "http://localhost:11434/v1",
+        },
+    )
+    api_key: str | None = attrs.field(
+        default=None,
+        metadata={
+            "description": "Optional API key sent as Bearer token",
+            "default": None,
         },
     )
     timeout: float = attrs.field(
@@ -196,6 +216,23 @@ class OllamaChatAgent:
                 if content:
                     yield content
 
+    async def list_models(self) -> list[str]:
+        """List model IDs available at the configured OpenAI-compatible endpoint.
+
+        Returns:
+            A list of model identifiers. If the endpoint cannot be reached or
+            returns an unexpected payload, an empty list is returned so the
+            healthcheck degrades gracefully.
+        """
+        try:
+            response = await self._client.get("/models")
+            response.raise_for_status()
+            data = response.json()
+        except Exception:
+            return []
+        models = data.get("data", []) if isinstance(data, dict) else data
+        return [m["id"] for m in models if isinstance(m, dict) and "id" in m]
+
     async def aclose(self) -> None:
         """Release the internal HTTP client resources."""
         await self._client.aclose()
@@ -204,5 +241,9 @@ class OllamaChatAgent:
 def build_chat_agent(config: ChatConfig) -> ChatAgent:
     """Factory selecting the concrete :class:`ChatAgent` from ``config``."""
     if config.backend == "ollama":
-        return OllamaChatAgent(base_url=config.base_url, model=config.model)
+        return OllamaChatAgent(
+            base_url=config.base_url,
+            model=config.model,
+            api_key=config.api_key,
+        )
     return LocalEchoAgent(stream_delay_seconds=config.stream_delay_seconds)
